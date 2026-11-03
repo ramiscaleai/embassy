@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `FairSemaphore` not waking the next waiter when a queued `acquire`/`acquire_all` future is
   dropped. Dropping the waiter at the head of the queue left the tasks behind it pending until an
   unrelated `release` happened to wake them, even when enough permits were already available.
+- Fix `OnceLock` not dropping its value when the `OnceLock` itself is dropped.
 
 ## 0.8.0 - 2026-03-10
 - Fix wakers getting dropped by `Signal::reset`

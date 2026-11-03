@@ -126,12 +126,8 @@ impl<T> OnceLock<T> {
     }
 
     /// Consume the `OnceLock`, returning the underlying value if it was initialized.
-    pub fn into_inner(self) -> Option<T> {
-        if self.init.load(Ordering::Relaxed) {
-            Some(unsafe { self.data.into_inner().assume_init() })
-        } else {
-            None
-        }
+    pub fn into_inner(mut self) -> Option<T> {
+        self.take()
     }
 
     /// Take the underlying value if it was initialized, uninitializing the `OnceLock` in the process.
@@ -160,6 +156,15 @@ impl<T> OnceLock<T> {
     /// Must only be used if a value has been set.
     unsafe fn get_ref_unchecked(&self) -> &T {
         (*self.data.as_ptr()).assume_init_ref()
+    }
+}
+
+impl<T> Drop for OnceLock<T> {
+    fn drop(&mut self) {
+        if *self.init.get_mut() {
+            // Safety: `init` is only set once `data` holds a value, and cleared when it is taken out.
+            unsafe { self.data.get_mut().assume_init_drop() };
+        }
     }
 }
 
@@ -245,5 +250,76 @@ mod tests {
 
         assert_eq!(lock.get_or_init(|| 43), &43);
         assert_eq!(lock.is_set(), true);
+    }
+
+    /// Counts how many times it has been dropped.
+    struct DropCounter<'a>(&'a Cell<usize>);
+
+    impl Drop for DropCounter<'_> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[test]
+    fn once_lock_drops_value() {
+        let drops = Cell::new(0);
+        let lock = OnceLock::new();
+        assert!(lock.init(DropCounter(&drops)).is_ok());
+        assert_eq!(drops.get(), 0);
+
+        drop(lock);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn once_lock_get_or_init_value_is_dropped() {
+        let drops = Cell::new(0);
+        let lock = OnceLock::new();
+        lock.get_or_init(|| DropCounter(&drops));
+        lock.get_or_init(|| DropCounter(&drops));
+        assert_eq!(drops.get(), 0);
+
+        drop(lock);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn once_lock_uninitialized_drops_nothing() {
+        struct PanicOnDrop;
+
+        impl Drop for PanicOnDrop {
+            fn drop(&mut self) {
+                panic!("dropped a value that was never set");
+            }
+        }
+
+        drop(OnceLock::<PanicOnDrop>::new());
+    }
+
+    #[test]
+    fn once_lock_into_inner_drops_value_once() {
+        let drops = Cell::new(0);
+        let lock = OnceLock::new();
+        assert!(lock.init(DropCounter(&drops)).is_ok());
+
+        let value = lock.into_inner();
+        assert_eq!(drops.get(), 0);
+
+        drop(value);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn once_lock_take_then_drop_drops_value_once() {
+        let drops = Cell::new(0);
+        let mut lock = OnceLock::new();
+        assert!(lock.init(DropCounter(&drops)).is_ok());
+
+        drop(lock.take());
+        assert_eq!(drops.get(), 1);
+
+        drop(lock);
+        assert_eq!(drops.get(), 1);
     }
 }
